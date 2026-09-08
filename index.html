@@ -222,6 +222,41 @@ td.num{font-family:'JetBrains Mono';text-align:right}
 .plan-icon{font-size:34px;margin-bottom:12px}.plan-name{font-size:22px;font-weight:800}.plan-desc{color:var(--muted);font-size:13px;margin:8px 0 18px;min-height:38px}.plan-price{font-size:30px;font-weight:800}.plan-price small{font-size:13px;color:var(--muted);font-weight:500}.plan-list{list-style:none;margin:20px 0}.plan-list li{padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}.plan-list li:before{content:'✓';color:var(--ok);font-weight:800;margin-right:8px}.plan-btn{width:100%;padding:12px;border-radius:11px;background:var(--glass2);border:1px solid var(--line);font-weight:700}.plan-card.featured .plan-btn,.plan-card.gold .plan-btn{background:var(--grad);color:#fff;border:none}.current-plan{margin-top:22px;padding:16px 18px;border-radius:14px;background:var(--glass);border:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:15px}.current-plan b{color:var(--c2)}
 @media(max-width:900px){.plans-grid{grid-template-columns:1fr}.plan-desc{min-height:auto}}
 
+
+/* Seletor de músicas da aba Regiões */
+#regionSong{
+  background:#121827 !important;
+  color:#f4f1ff !important;
+  border:1px solid rgba(168,85,247,.45) !important;
+  color-scheme:dark;
+  min-width:420px;
+  max-width:100%;
+  cursor:pointer;
+}
+#regionSong option{
+  background:#121827 !important;
+  color:#f4f1ff !important;
+  padding:10px;
+}
+#regionSong:focus{outline:none;box-shadow:0 0 0 3px rgba(168,85,247,.18);}
+
+/* Seletores da aba Tendências & comparação */
+#cmpA,#cmpB{
+  background:#121827 !important;
+  color:#f4f1ff !important;
+  border:1px solid rgba(168,85,247,.45) !important;
+  color-scheme:dark;
+  min-width:260px;
+  max-width:100%;
+  cursor:pointer;
+}
+#cmpA option,#cmpB option{
+  background:#121827 !important;
+  color:#f4f1ff !important;
+  padding:10px;
+}
+#cmpA:focus,#cmpB:focus{outline:none;box-shadow:0 0 0 3px rgba(168,85,247,.18);}
+@media(max-width:600px){#regionSong,#cmpA,#cmpB{min-width:0;width:100%;}}
 </style>
 </head>
 <body>
@@ -606,9 +641,60 @@ async function loadCatalog(){
   if(songs.length){ recomputeArtistMetrics(); state.queue=songs.map(s=>s.id); seedPlaylists(); return true; }
   return false;
 }
+// Perfis de popularidade e cálculo proporcional.
+// Artistas com referência conhecida usam valores-base; os demais são escalados
+// proporcionalmente ao desempenho do catálogo, evitando números aleatórios.
+const ARTIST_STATS={
+  'matheus & kauan':{mon:14500000,fol:13400000},
+  'matheus e kauan':{mon:14500000,fol:13400000},
+  'matuê':{mon:8500000,fol:15600000},
+  'matue':{mon:8500000,fol:15600000}
+};
+const normArtistName=n=>(n||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
+
 function recomputeArtistMetrics(){
-  artists.forEach(a=>{const tp=songs.filter(s=>s.a===a.id).reduce((x,s)=>x+s.plays,0);
-    a.mon=Math.round(tp*0.18+5e5); a.fol=Math.round(tp*0.045+1e5);});
+  const profiles=artists.map(a=>{
+    const artistSongs=songs.filter(s=>s.a===a.id);
+    const total=artistSongs.reduce((x,s)=>x+s.plays,0);
+    // Score ponderado: mais reproduções ajudam, mas um catálogo enorme não
+    // aumenta os números de forma artificial.
+    const avg=total/Math.max(artistSongs.length,1);
+    const score=Math.sqrt(Math.max(total,1))*0.72 + Math.sqrt(Math.max(avg,1))*0.28;
+    return {a,artistSongs,total,avg,score,known:ARTIST_STATS[normArtistName(a.name)]||null};
+  });
+
+  const unknown=profiles.filter(p=>!p.known);
+  const scores=unknown.map(p=>p.score).sort((a,b)=>a-b);
+  const minScore=scores[0]||1;
+  const maxScore=scores[scores.length-1]||minScore+1;
+
+  profiles.forEach(p=>{
+    if(p.known){
+      p.a.mon=p.known.mon;
+      p.a.fol=p.known.fol;
+      // Total de plays proporcional aos ouvintes mensais, sem deixar uma faixa
+      // isolada dominar todo o artista.
+      const targetTotal=Math.round(p.known.mon*11.5);
+      const current=Math.max(p.total,1);
+      p.artistSongs.forEach(s=>{
+        s.plays=Math.max(350000,Math.round((s.plays/current)*targetTotal));
+      });
+    }else{
+      // Escala logarítmica: diferenças pequenas de popularidade não viram saltos
+      // gigantes, e artistas menores continuam proporcionais aos maiores.
+      const pos=(p.score-minScore)/Math.max(maxScore-minScore,1);
+      const mon=Math.round(350000 + Math.pow(Math.max(0,pos),0.72)*9500000);
+      p.a.mon=mon;
+      // Seguidores ficam em uma faixa coerente com ouvintes mensais.
+      const ratio=0.38 + Math.min(0.72,p.artistSongs.length*0.07);
+      p.a.fol=Math.round(mon*ratio);
+      const targetTotal=Math.round(mon*(7.5+p.artistSongs.length*0.55));
+      const current=Math.max(p.total,1);
+      p.artistSongs.forEach(s=>{
+        s.plays=Math.max(250000,Math.round((s.plays/current)*targetTotal));
+      });
+    }
+  });
 }
 function seedPlaylists(){
   const top=[...songs].sort((a,b)=>b.plays-a.plays);
@@ -812,8 +898,18 @@ const cities=[{c:'São Paulo',uf:'SP',x:62,y:74,b:920000},{c:'Rio de Janeiro',uf
   {c:'Salvador',uf:'BA',x:76,y:50,b:430000},{c:'Recife',uf:'PE',x:84,y:42,b:320000},
   {c:'Fortaleza',uf:'CE',x:78,y:33,b:300000},{c:'Porto Alegre',uf:'RS',x:55,y:90,b:280000},
   {c:'Curitiba',uf:'PR',x:58,y:82,b:300000},{c:'Manaus',uf:'AM',x:38,y:32,b:190000}];
-const countries=[['Brasil',6200000],['Portugal',940000],['EUA',720000],['Argentina',510000],['México',430000],['Angola',280000]];
-const states=[['SP',1.9],['RJ',1.4],['MG',0.9],['BA',0.8],['RS',0.6],['PR',0.6]];
+const countryBase=[['Brasil',6200000],['Portugal',940000],['EUA',720000],['Argentina',510000],['México',430000],['Angola',280000]];
+const stateBase=[['SP',1.9],['RJ',1.4],['MG',0.9],['BA',0.8],['RS',0.6],['PR',0.6]];
+
+// Gera dados regionais diferentes e estáveis para cada música selecionada
+function regionalData(sid){
+  const rand=(n)=>{const x=Math.sin((sid*97+n*31)*12.9898)*43758.5453;return x-Math.floor(x);};
+  const factor=(n,min=.55,max=1.45)=>min+rand(n)*(max-min);
+  return {
+    countries:countryBase.map((c,i)=>[c[0],Math.round(c[1]*factor(i+1))]),
+    states:stateBase.map((st,i)=>[st[0],+(st[1]*factor(i+20,.50,1.55)).toFixed(2)])
+  };
+}
 
 /* ============ GRÁFICOS ============ */
 let charts={};
@@ -839,13 +935,16 @@ function renderDash(){
   mk('cTopArt',{type:'doughnut',data:{labels:art.map(a=>a.n),datasets:[{data:art.map(a=>a.v),backgroundColor:['#FF4D6D','#A855F7','#22D3EE','#34D399','#F59E0B','#6366F1'],borderWidth:0}]},options:{plugins:{legend:{position:'right',labels:{boxWidth:11,font:{size:11}}}},cutout:'62%',maintainAspectRatio:false}});
 }
 
-function fillRegionSelect(){const top=[...songs].sort((a,b)=>b.plays-a.plays).slice(0,15);
+function fillRegionSelect(){const top=[...songs].sort((a,b)=>b.plays-a.plays);
   regionSong.innerHTML=top.map(s=>'<option value="'+s.id+'">'+s.t+' — '+artistName(s.a)+'</option>').join('');}
 function renderRegion(){
   const sid=+regionSong.value||(songs[0]&&songs[0].id);const s=song(sid);if(!s)return;rankSongName.textContent=s.t;
   const map=document.getElementById('map');map.querySelectorAll('.bubble').forEach(b=>b.remove());
   const seed=sid*7;const data=cities.map((ci,i)=>({...ci,plays:Math.round(ci.b*(0.4+((seed+i*13)%50)/50))}));
   const max=Math.max(...data.map(d=>d.plays));
+  const regional=regionalData(sid);
+  const countries=regional.countries;
+  const states=regional.states;
   data.forEach(d=>{const sz=20+(d.plays/max)*46;const el=document.createElement('div');el.className='bubble';
     el.style.cssText='left:'+d.x+'%;top:'+d.y+'%;width:'+sz+'px;height:'+sz+'px';
     el.onmousemove=e=>{tip.style.display='block';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY-10)+'px';tip.innerHTML='<b>'+d.c+'/'+d.uf+'</b><br>'+fmtN(d.plays)+' reproduções';};
@@ -875,16 +974,31 @@ function renderArtists(){
   markPlaying();}
 function toggleFollow(id){state.follows.has(id)?state.follows.delete(id):state.follows.add(id);renderArtists();}
 
-function fillCompare(){const top=[...artists].sort((a,b)=>b.mon-a.mon).slice(0,8);
+function fillCompare(){const top=[...artists].sort((a,b)=>b.mon-a.mon);
   const o=top.map(a=>'<option value="'+a.id+'">'+a.name+'</option>').join('');cmpA.innerHTML=o;cmpB.innerHTML=o;if(top[1])cmpB.value=top[1].id;}
 function renderTrends(){
   const a=artists.find(x=>x.id==cmpA.value),b=artists.find(x=>x.id==cmpB.value);if(!a||!b)return;
   const aPlays=id=>songs.filter(s=>s.a===id).reduce((x,s)=>x+s.plays,0);
-  const data=ar=>[ar.mon/1e7,ar.fol/1.5e6,aPlays(ar.id)/7e7,(songs.filter(s=>s.a===ar.id).length)/4,(ar.mon/Math.max(ar.fol,1))/8];
+  const allTotals=artists.map(x=>aPlays(x.id));
+  const maxMon=Math.max(...artists.map(x=>x.mon),1);
+  const maxFol=Math.max(...artists.map(x=>x.fol),1);
+  const maxPlays=Math.max(...allTotals,1);
+  const maxCatalog=Math.max(...artists.map(x=>songs.filter(s=>s.a===x.id).length),1);
+  const avgPlays=id=>{const ss=songs.filter(s=>s.a===id);return aPlays(id)/Math.max(ss.length,1);};
+  const maxAvg=Math.max(...artists.map(x=>avgPlays(x.id)),1);
+  // Todas as métricas usam a mesma escala percentual (0–100), preservando
+  // a proporção real entre os artistas exibidos.
+  const data=ar=>[
+    +(ar.mon/maxMon*100).toFixed(1),
+    +(ar.fol/maxFol*100).toFixed(1),
+    +(aPlays(ar.id)/maxPlays*100).toFixed(1),
+    +(songs.filter(s=>s.a===ar.id).length/maxCatalog*100).toFixed(1),
+    +(avgPlays(ar.id)/maxAvg*100).toFixed(1)
+  ];
   mk('cCompare',{type:'radar',data:{labels:['Ouvintes mensais','Seguidores','Reproduções','Catálogo','Engajamento'],datasets:[
     {label:a.name,data:data(a),borderColor:'#FF4D6D',backgroundColor:'rgba(255,77,109,.2)',borderWidth:2},
     {label:b.name,data:data(b),borderColor:'#22D3EE',backgroundColor:'rgba(34,211,238,.2)',borderWidth:2}]},
-    options:{plugins:{legend:{position:'top'}},scales:{r:{grid:{color:gridC()},angleLines:{color:gridC()},pointLabels:{font:{size:11}},ticks:{display:false}}},maintainAspectRatio:false}});
+    options:{plugins:{legend:{position:'top'}},scales:{r:{min:0,max:100,grid:{color:gridC()},angleLines:{color:gridC()},pointLabels:{font:{size:11}},ticks:{display:false}}},maintainAspectRatio:false}});
   trendList.innerHTML=[...songs].sort((x,y)=>(y.plays%7)-(x.plays%7)).slice(0,6).map((s,i)=>{const up=['+184%','+97%','+62%','+48%','+33%','+21%'][i];
     return '<div class="song" data-id="'+s.id+'" onclick="play('+s.id+')"><span class="rank '+(i<3?'g'+(i+1):'')+'">'+(i+1)+'</span><div class="cover" style="margin-left:8px;'+coverStyle(s)+'">'+coverInner(s)+'</div><div class="meta"><b>'+s.t+'</b><span>'+artistName(s.a)+'</span></div><span class="delta up">'+up+'</span></div>';}).join('');
   markPlaying();}
